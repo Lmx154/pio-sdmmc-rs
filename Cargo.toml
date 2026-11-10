@@ -1,0 +1,32 @@
+[package]
+name = "pio-sdmmc"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "Native four-bit SD card host: a hardware-independent protocol core, with a PIO + DMA bus for embassy-rp"
+
+[features]
+default = []
+std = []
+# Simulated SD card with fault injection. Host only; for this crate's tests and for testing code built on it.
+sim = ["std"]
+defmt = ["dep:defmt", "embassy-rp?/defmt", "embassy-time?/defmt"]
+# The PIO + DMA bus for embassy-rp. The chip feature (rp235xa/rp235xb) comes from the application.
+embassy-rp = ["dep:embassy-rp", "dep:embassy-time"]
+# Extra entry points that only the on-target back-pressure test uses.
+test-hooks = ["embassy-rp"]
+
+[dependencies]
+defmt = { version = "1.0.1", optional = true }
+embassy-rp = { version = "0.10.0", default-features = false, optional = true }
+embassy-time = { version = "0.5.1", optional = true }
+
+[dev-dependencies]
+# The tests run against the simulated card, so `cargo test` needs no feature flag.
+pio-sdmmc = { path = ".", features = ["sim"] }
+embassy-futures = "0.1.2"
+proptest = "1.12"
+
+[workspace]
+exclude = ["hil"]
