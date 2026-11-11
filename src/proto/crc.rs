@@ -4,9 +4,9 @@
 /// response frames (section 4.5). The result is in `0..=0x7F`.
 pub const fn crc7(bytes: &[u8]) -> u8 {
     let mut crc = 0u8;
-    let mut i = 0;
-    while i < bytes.len() {
-        let byte = bytes[i];
+    let mut rest = bytes;
+    while let [byte, tail @ ..] = rest {
+        let byte = *byte;
         let mut bit = 0;
         while bit < 8 {
             let data = (byte >> (7 - bit)) & 1;
@@ -17,7 +17,7 @@ pub const fn crc7(bytes: &[u8]) -> u8 {
             }
             bit += 1;
         }
-        i += 1;
+        rest = tail;
     }
     crc
 }
@@ -26,9 +26,9 @@ pub const fn crc7(bytes: &[u8]) -> u8 {
 /// value 0): the CRC of a single data line (section 4.5).
 pub const fn crc16(bytes: &[u8]) -> u16 {
     let mut crc = 0u16;
-    let mut i = 0;
-    while i < bytes.len() {
-        crc ^= (bytes[i] as u16) << 8;
+    let mut rest = bytes;
+    while let [byte, tail @ ..] = rest {
+        crc ^= (*byte as u16) << 8;
         let mut bit = 0;
         while bit < 8 {
             crc = if crc & 0x8000 != 0 {
@@ -38,7 +38,7 @@ pub const fn crc16(bytes: &[u8]) -> u16 {
             };
             bit += 1;
         }
-        i += 1;
+        rest = tail;
     }
     crc
 }

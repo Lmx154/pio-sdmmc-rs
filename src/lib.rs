@@ -15,7 +15,7 @@
 
 pub mod bus;
 pub mod card;
-#[cfg(any(test, feature = "embassy-rp"))]
+#[cfg(any(test, feature = "embassy-rp-0-10"))]
 pub mod pio;
 pub mod proto;
 #[cfg(feature = "sim")]

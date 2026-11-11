@@ -9,6 +9,12 @@
 //!
 //! An operation marks itself in progress while it runs. If its future is dropped before it
 //! finishes, the next call first makes the same single clean-up attempt.
+//!
+//! The driver also remembers that an application command (CMD55 and the command after it) is
+//! open until the command's response has arrived. If the pair is cut short, the card may still
+//! expect an application command and would take the next command as one, so the next clean-up
+//! first closes the pair with CMD55 and ACMD23 for one block (the card's default). That costs
+//! two extra commands on the next call, and only in that case.
 
 mod block;
 mod error;
@@ -126,6 +132,10 @@ pub struct SdCard<B: Bus> {
     info: Option<CardInfo>,
     stats: Stats,
     in_progress: bool,
+    /// An application-command pair is open: set before CMD55 goes out, cleared when the
+    /// application command's response has been received. Part of the driver, not of any one
+    /// future, so it survives a dropped operation; the next clean-up closes the pair.
+    app_open: bool,
 }
 
 impl<B: Bus> SdCard<B> {
@@ -137,6 +147,7 @@ impl<B: Bus> SdCard<B> {
             info: None,
             stats: Stats::default(),
             in_progress: false,
+            app_open: false,
         }
     }
 
@@ -232,15 +243,47 @@ impl<B: Bus> SdCard<B> {
         check_status(cmd.index, lba, status)
     }
 
-    /// CMD55 then `cmd`, both checked.
+    /// CMD55 then `cmd`, both checked. Every application command goes through here or through
+    /// [`acmd_raw`](Self::acmd_raw), which keep `app_open` up to date.
     async fn acmd(
         &mut self,
         rca: u16,
         cmd: Command,
         lba: Option<u32>,
     ) -> Result<CardStatus, Error> {
-        self.r1(Command::app_cmd(rca), lba).await?;
-        self.r1(cmd, lba).await
+        self.acmd_with(rca, cmd, lba, true).await
+    }
+
+    /// As [`acmd`](Self::acmd), without checking the error bits of either status.
+    async fn acmd_raw(
+        &mut self,
+        rca: u16,
+        cmd: Command,
+        lba: Option<u32>,
+    ) -> Result<CardStatus, Error> {
+        self.acmd_with(rca, cmd, lba, false).await
+    }
+
+    async fn acmd_with(
+        &mut self,
+        rca: u16,
+        cmd: Command,
+        lba: Option<u32>,
+        strict: bool,
+    ) -> Result<CardStatus, Error> {
+        self.app_open = true;
+        let app = Command::app_cmd(rca);
+        let status = self.r1_raw(app, lba).await?;
+        if strict {
+            check_status(app.index, lba, status)?;
+        }
+        let status = self.r1_raw(cmd, lba).await?;
+        self.app_open = false;
+        if strict {
+            check_status(cmd.index, lba, status)
+        } else {
+            Ok(status)
+        }
     }
 
     /// Waits for the card to release DAT0, for at most `timeout_ms`.

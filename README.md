@@ -1,6 +1,6 @@
 # pio-sdmmc
 
-Driver for a microSD card on a native four-bit SD bus, for the MARV V2 Rev 1 flight controller (RP2354B). It has three layers. `proto` is the SD protocol as pure functions. `card` is the driver (`SdCard`: identification, block reads and writes). Both are hardware-independent and reach the card only through the `Bus` trait. The `pio` module (feature `embassy-rp`) is the bus for the RP2350: one PIO state machine and one DMA channel. The state machine that moves the bits also makes the clock, so a late DMA transfer or a busy CPU pauses the clock instead of corrupting data.
+Driver for a microSD card on a native four-bit SD bus, for the MARV V2 Rev 1 flight controller (RP2354B). It has three layers. `proto` is the SD protocol as pure functions. `card` is the driver (`SdCard`: identification, block reads and writes). Both are hardware-independent and reach the card only through the `Bus` trait. The `pio` module (feature `embassy-rp-0-10`) is the bus for the RP2350: one PIO state machine and one DMA channel. The state machine that moves the bits also makes the clock, so a late DMA transfer or a busy CPU pauses the clock instead of corrupting data.
 
 ## Usage
 
@@ -20,7 +20,7 @@ card.read_blocks(lba, &mut blocks).await?;
 
 ## What the application provides
 
-- A `Bus`. The PIO + DMA bus for embassy-rp is included (feature `embassy-rp`).
+- A `Bus`. The PIO + DMA bus for embassy-rp is included (feature `embassy-rp-0-10`).
 - For the included bus: a PIO block whose pins all lie in GPIO16-47, one DMA channel, and the chip feature of embassy-rp (`rp235xa` or `rp235xb`).
 - The driver reads and writes blocks. Files need a filesystem on top; none is included.
 
@@ -33,9 +33,9 @@ All features are off by default. Without them the crate is hardware-independent 
 | Feature | What it adds |
 |---|---|
 | `defmt` | `defmt::Format` for the public data and error types |
-| `embassy-rp` | the PIO transport for embassy-rp; the application picks the chip feature (`rp235xa` or `rp235xb`) |
+| `embassy-rp-0-10` | the PIO transport for embassy-rp; the application picks the chip feature (`rp235xa` or `rp235xb`) |
 | `sim` | a simulated SD card with fault injection, for host tests of code built on the driver (needs `std`) |
-| `test-hooks` | entry points that only the on-board back-pressure test uses |
+| `_test-hooks` | entry points that only the on-board back-pressure test uses |
 
 ## SD card
 
@@ -94,7 +94,7 @@ Not done for this device:
 
 ```
 Cargo.toml       the driver crate (its own workspace root)
-src/             the driver: proto, card, pio (feature embassy-rp), sim (feature sim)
+src/             the driver: proto, card, pio (feature embassy-rp-0-10), sim (feature sim)
 tests/           host tests against the simulated card
 hil/             the on-board test: one package, its own workspace; the only place that uses embassy-rp
   src/lib.rs     reports the verdict to the host

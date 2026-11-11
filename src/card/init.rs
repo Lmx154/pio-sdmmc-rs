@@ -31,6 +31,8 @@ impl<B: Bus> SdCard<B> {
     pub async fn init(&mut self) -> Result<CardInfo, Error> {
         self.info = None;
         self.in_progress = false;
+        // The reset below ends any open application-command pair, so there is nothing to close.
+        self.app_open = false;
 
         self.bus.set_clock(self.init_clock());
         self.bus.clock_idle(POWER_UP_CLOCKS).await;

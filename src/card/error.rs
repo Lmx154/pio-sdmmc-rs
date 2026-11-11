@@ -119,6 +119,9 @@ pub enum Error {
     },
     /// Recovery could not bring the card back to the transfer state. Call
     /// [`SdCard::init`](super::SdCard::init).
+    ///
+    /// One case needs no `init`: when `cmd` is 55 or 23 the two commands that close an interrupted
+    /// application command failed, and the next call simply tries them again.
     UnexpectedState {
         /// The last command tried.
         cmd: u8,

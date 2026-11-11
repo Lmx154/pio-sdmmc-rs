@@ -76,6 +76,12 @@ impl<B: Bus> SdCard<B> {
     /// still in a data phase, wait for idle, CMD13): if the card is back in the transfer state
     /// the original error is returned, otherwise [`Error::UnexpectedState`], and the remedy is
     /// [`init`](Self::init). Blocks before the failed one hold valid data.
+    ///
+    /// If an earlier application command (CMD55 and the command after it) was cut short, the
+    /// first thing the clean-up does is close the pair with CMD55 and ACMD23 for one block, so
+    /// the card does not take CMD13 for an application command. That costs two extra commands on
+    /// the next call and only in that case; if those two fail too, the call returns
+    /// [`Error::UnexpectedState`] and the next call tries again.
     pub async fn read_blocks(&mut self, lba: u32, blocks: &mut [Block]) -> Result<(), Error> {
         self.transfer(lba, Buf::Read(blocks)).await
     }

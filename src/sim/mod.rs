@@ -1,4 +1,4 @@
-//! A deterministic simulated SD card that implements [`Bus`](crate::bus::Bus), with scripted
+//! A deterministic simulated SD card that implements [`Bus`], with scripted
 //! fault injection. Host only.
 //!
 //! [`SimCard`] models the card side of the wire: it parses the command frames the host sends,

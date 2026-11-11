@@ -13,9 +13,9 @@ std = []
 sim = ["std"]
 defmt = ["dep:defmt", "embassy-rp?/defmt", "embassy-time?/defmt"]
 # The PIO + DMA bus for embassy-rp. The chip feature (rp235xa/rp235xb) comes from the application.
-embassy-rp = ["dep:embassy-rp", "dep:embassy-time"]
+embassy-rp-0-10 = ["dep:embassy-rp", "dep:embassy-time"]
 # Extra entry points that only the on-target back-pressure test uses.
-test-hooks = ["embassy-rp"]
+_test-hooks = ["embassy-rp-0-10"]
 
 [dependencies]
 defmt = { version = "1.0.1", optional = true }

@@ -1,5 +1,5 @@
 //! The [`Bus`](crate::bus::Bus) on an RP235x PIO state machine and one DMA channel
-//! (feature `embassy-rp`).
+//! (feature `embassy-rp-0-10`).
 //!
 //! All bus timing comes from the state machine. The CPU and the DMA only fill and drain FIFOs,
 //! and the program is written so that a FIFO serviced late stops the clock instead of corrupting
@@ -130,13 +130,13 @@
 //! - The pins get no pulls (the board has external pull-ups on CMD and DAT0-3), Schmitt
 //!   triggers on, and the drive strength and slew rate from [`PioBusConfig`].
 
-#[cfg(feature = "embassy-rp")]
+#[cfg(feature = "embassy-rp-0-10")]
 mod driver;
-#[cfg(feature = "embassy-rp")]
+#[cfg(feature = "embassy-rp-0-10")]
 #[doc(hidden)]
-#[cfg(feature = "test-hooks")]
+#[cfg(feature = "_test-hooks")]
 pub mod hooks;
 pub mod wire;
 
-#[cfg(feature = "embassy-rp")]
+#[cfg(feature = "embassy-rp-0-10")]
 pub use driver::{IDENTIFICATION_HZ, PioBus, PioBusConfig};
