@@ -13,6 +13,8 @@
 //! above it, so all of it runs and is tested on the host.
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 
+#[cfg(feature = "block-device-driver-0-2")]
+pub mod blockdev;
 pub mod bus;
 pub mod card;
 #[cfg(any(test, feature = "embassy-rp-0-10"))]

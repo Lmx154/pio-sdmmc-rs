@@ -16,8 +16,12 @@ defmt = ["dep:defmt", "embassy-rp?/defmt", "embassy-time?/defmt"]
 embassy-rp-0-10 = ["dep:embassy-rp", "dep:embassy-time"]
 # Extra entry points that only the on-target back-pressure test uses.
 _test-hooks = ["embassy-rp-0-10"]
+# `BlockDevice<512>` from block-device-driver 0.2 for `SdCard`, for filesystem libraries such as embedded-fatfs.
+block-device-driver-0-2 = ["dep:block-device-driver", "dep:aligned"]
 
 [dependencies]
+aligned = { version = "0.4.2", optional = true }
+block-device-driver = { version = "0.2", optional = true }
 defmt = { version = "1.0.1", optional = true }
 embassy-rp = { version = "0.10.0", default-features = false, optional = true }
 embassy-time = { version = "0.5.1", optional = true }
