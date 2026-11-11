@@ -25,3 +25,7 @@ pub mod sim;
 
 pub use bus::{Bus, BusError, ResponseBuf};
 pub use card::{Block, CardInfo, Config, Error, SdCard};
+
+#[cfg(all(doctest, feature = "sim"))]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
