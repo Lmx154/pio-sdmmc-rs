@@ -98,8 +98,8 @@ Through the trait, every request goes through a bounce buffer of 8 blocks (4 KiB
 
 ### Not verified on real hardware
 
-- Recovery after an interrupted application command. It is proven only against the simulated card, and relies on the rule that a command after CMD55 is an application command only when one with that index exists. Only the simulated card implements that rule, and the rule was not re-read in the specification.
-- No on-board program drops a driver future or injects a failure through the driver (checked by reading `hil/src/bin/*.rs`). The one error path of `sd_smoke` is a read past the end, which sends nothing. So cancellation on the real bus, read CRC errors, rejected writes, busy and timeout recovery, card removal and power loss are proven on the simulated card only. At bus level, `sd_bus` does show that a command the card ignores times out and leaves the bus usable.
+- Recovery after an interrupted application command has run on ONE real card (`sd_faults`, 2026-11-11, the SanDisk 64 GB card): the pair was cut between CMD55 and ACMD23 52 times per run, the card then answered a raw CMD13 with its APP_CMD bit set (6 of 6), the clean-up's CMD55 + ACMD23 pair was accepted, and the next operation succeeded with correct data every time. That card supports CMD23, so the driver takes the ACMD23 route on it only because the test hides the SCR's CMD23 bit from the driver; a card that really lacks CMD23 has not been tested. The rule the clean-up relies on (a command after CMD55 is an application command only when one with that index exists) was not re-read in the specification.
+- Cancellation on the real bus is covered in part. `sd_faults` drops driver futures on the real card: about 400 reads and 390 writes per run, cut by time and at every suspension point, with the first operation after each cancel being a status call, a read or a write in turn. The driver cleaned up by itself every time: 0 failed next operations, 0 wrong bytes, 0 bytes damaged outside the written range (three runs). Every one of those cancels landed in the data phase or between two operations. None landed inside a command frame or in a busy wait on the ordinary route (0 of 70 attempts: on this back-end the command future was never pending when polled), so those cases, and read CRC errors, rejected writes, timeouts, card removal and power loss, are proven on the simulated card only. At bus level, `sd_bus` does show that a command the card ignores times out and leaves the bus usable.
 - Cards other than the one tested: a SanDisk 64 GB SDXC (CID product "SK64G"). No SDSC or SDHC card, no other manufacturer.
 - Any other board, pins or `clk_sys`.
 
@@ -136,8 +136,9 @@ On the board, through a debug probe: `tools/run.sh <program>` (it takes a lock, 
 | `sd_bus` | the PIO bus alone: identification at 400 kHz, reads, writes, a deliberately late DMA transfer, speed at 25 MHz |
 | `sd_smoke` | the card driver on the real bus: identification, 1 MiB write and read-back compare, throughput by call size, 4 KiB write latency, `OutOfRange` then a normal read |
 | `sd_blockdev` | the trait on the real bus: round trips against the direct path, a request across the 8-block chunk boundary, trait against direct throughput |
+| `sd_faults` | recovery on the real card: reads and writes cancelled by time and at every suspension point, the application-command pair cut between CMD55 and ACMD23, positive controls that find the card not ready when the clean-up is left out, card identity and data intact at the end |
 
-`sd_smoke` and `sd_blockdev` write only in a fixed scratch area: 1 MiB from block 50000000 (blocks 50000000 to 50002047). They overwrite it. `sd_bus` also overwrites blocks, at random addresses between block 1000000 and 1000000 blocks before the end of the card, and from block 8000000. Use an expendable card.
+`sd_smoke`, `sd_blockdev` and `sd_faults` write only in a fixed scratch area: 1 MiB from block 50000000 (blocks 50000000 to 50002047). They overwrite it. `sd_bus` also overwrites blocks, at random addresses between block 1000000 and 1000000 blocks before the end of the card, and from block 8000000. Use an expendable card.
 
 ## Cargo features
 
