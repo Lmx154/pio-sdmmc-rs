@@ -12,6 +12,19 @@
 //! [`Bus`] is a deliberately dumb pipe. Every protocol decision and every integrity check lives
 //! above it, so all of it runs and is tested on the host.
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::indexing_slicing,
+        clippy::undocumented_unsafe_blocks
+    )
+)]
 
 #[cfg(feature = "block-device-driver-0-2")]
 pub mod blockdev;

@@ -70,6 +70,8 @@ impl<B: Bus> BlockDevice<512> for SdCard<B> {
         let mut bounce = [Block::new(); CHUNK_BLOCKS];
         let mut lba = block_address;
         for chunk in data.chunks_mut(CHUNK_BLOCKS) {
+            #[allow(clippy::indexing_slicing)]
+            // bound: `chunks_mut(CHUNK_BLOCKS)` gives len <= CHUNK_BLOCKS = bounce.len()
             let staged = &mut bounce[..chunk.len()];
             self.read_blocks(lba, staged).await?;
             for (dst, src) in chunk.iter_mut().zip(staged.iter()) {
@@ -89,6 +91,8 @@ impl<B: Bus> BlockDevice<512> for SdCard<B> {
         let mut bounce = [Block::new(); CHUNK_BLOCKS];
         let mut lba = block_address;
         for chunk in data.chunks(CHUNK_BLOCKS) {
+            #[allow(clippy::indexing_slicing)]
+            // bound: `chunks(CHUNK_BLOCKS)` gives len <= CHUNK_BLOCKS = bounce.len()
             let staged = &mut bounce[..chunk.len()];
             for (dst, src) in staged.iter_mut().zip(chunk.iter()) {
                 dst.as_bytes_mut().copy_from_slice(&src[..]);

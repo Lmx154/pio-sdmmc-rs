@@ -94,7 +94,7 @@ Through the trait, every request goes through a bounce buffer of 8 blocks (4 KiB
 - A retry policy (see "Rules"). Timeouts are the fixed `Config` values, not taken from the card class.
 - Card detect (the board has none) and a probe call: a missing card shows only as an error from `init` or from an operation.
 - Cards that `init` refuses with `Error::Unsupported`: CMD8 voltage range not 2.7-3.6 V, a wrong CMD8 check pattern, SDUC, a CSD that cannot be read, OCR capacity bit and CSD version that disagree, an SCR without four-bit width, RCA 0 on every request. Not handled either: SPI mode, 1.8 V and UHS-I, card lock, the write-protect switch.
-- This crate does not yet carry the no-panic lint block the sensor drivers have. A trial of that block (2026-11-11) flagged 17 places in the bus code (indexing and slicing in `src/pio/wire.rs` and `src/pio/driver.rs`) and 2 in the simulated card; none has been rewritten yet.
+- The no-panic lint block the sensor drivers have is in place, but its lints do not cover `assert!`: the PIO back-end still asserts two caller preconditions (a data block of 4, 8, 64 or 512 bytes in `src/pio/driver.rs`; the response word count in `pio::wire::unpack_response`). Neither depends on what the card sends.
 
 ### Not verified on real hardware
 

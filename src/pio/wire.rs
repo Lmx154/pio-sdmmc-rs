@@ -51,10 +51,18 @@ pub fn command_stream(frame: &[u8; 6]) -> [u32; CMD_STREAM_WORDS] {
     for n in 0..CMD_SEND_NIBBLES as usize {
         let one = match n.checked_sub(CMD_IDLE_NIBBLES) {
             None => true,
-            Some(bit) => frame[bit / 8] & (0x80 >> (bit % 8)) != 0,
+            Some(bit) => {
+                #[allow(clippy::indexing_slicing)]
+                // bound: bit < CMD_SEND_NIBBLES - CMD_IDLE_NIBBLES = 47, so bit / 8 <= 5 < frame.len()
+                let byte = frame[bit / 8];
+                byte & (0x80 >> (bit % 8)) != 0
+            }
         };
         if one {
-            words[n / 8] |= 0xF << (28 - 4 * (n % 8));
+            #[allow(clippy::indexing_slicing)]
+            // bound: n < CMD_SEND_NIBBLES = 56, so n / 8 <= 6 < CMD_STREAM_WORDS = words.len()
+            let word = &mut words[n / 8];
+            *word |= 0xF << (28 - 4 * (n % 8));
         }
     }
     words
@@ -65,10 +73,16 @@ pub fn command_stream(frame: &[u8; 6]) -> [u32; CMD_STREAM_WORDS] {
 fn received_nibble(words: &[u32], total: usize, k: usize) -> u32 {
     let full = total / 8;
     if k < full * 8 {
-        words[k / 8] >> (28 - 4 * (k % 8)) & 0xF
+        #[allow(clippy::indexing_slicing)]
+        // bound: k < full * 8 here, and full = total / 8 < words.len() by the caller's check
+        let word = words[k / 8];
+        word >> (28 - 4 * (k % 8)) & 0xF
     } else {
         let rest = total % 8;
-        words[full] >> (4 * (rest - 1 - (k - full * 8))) & 0xF
+        #[allow(clippy::indexing_slicing)]
+        // bound: full = total / 8 < recv_words(total) = words.len() by the caller's check
+        let word = words[full];
+        word >> (4 * (rest - 1 - (k - full * 8))) & 0xF
     }
 }
 
@@ -88,7 +102,10 @@ pub fn unpack_response(words: &[u32], out: &mut [u8]) {
     for k in 0..total {
         if received_nibble(words, total, k) & 1 != 0 {
             let bit = k + 1;
-            out[bit / 8] |= 0x80 >> (bit % 8);
+            #[allow(clippy::indexing_slicing)]
+            // bound: bit <= total = 8 * out.len() - 1, so bit / 8 < out.len()
+            let byte = &mut out[bit / 8];
+            *byte |= 0x80 >> (bit % 8);
         }
     }
 }
@@ -133,6 +150,12 @@ pub const fn fifo_to_mem(word: u32) -> u32 {
 
 /// Fills `stage` with the words of a command (header and stream) for a DMA transfer without
 /// byte swap, and returns how many words it used.
+///
+/// # Panics
+///
+/// If `stage` holds fewer than `1 + CMD_STREAM_WORDS` words.
+#[allow(clippy::indexing_slicing)]
+// bound: the `# Panics` precondition (stage.len() >= 1 + CMD_STREAM_WORDS) covers every index in this function
 pub fn stage_command(stage: &mut [u32], frame: &[u8; 6], recv: u16) -> usize {
     stage[0] = header(CMD_SEND_NIBBLES, recv);
     stage[1..=CMD_STREAM_WORDS].copy_from_slice(&command_stream(frame));
@@ -141,6 +164,12 @@ pub fn stage_command(stage: &mut [u32], frame: &[u8; 6], recv: u16) -> usize {
 
 /// Fills `stage` with an idle-clock operation of `words` words of idle nibbles (CMD high, nothing
 /// received) for a DMA transfer without byte swap, and returns how many words it used.
+///
+/// # Panics
+///
+/// If `stage` holds fewer than `1 + words` words.
+#[allow(clippy::indexing_slicing)]
+// bound: the `# Panics` precondition (stage.len() >= 1 + words) covers every index in this function
 pub fn stage_idle(stage: &mut [u32], words: usize) -> usize {
     stage[0] = header((8 * words) as u16, 0);
     stage[1..=words].fill(IDLE_WORD);
@@ -150,6 +179,12 @@ pub fn stage_idle(stage: &mut [u32], words: usize) -> usize {
 /// Fills `stage` with a write operation for a DMA transfer with byte swap (each word's bytes
 /// reversed on the way to the FIFO), and returns how many words it used. Caller data is copied
 /// as it is, so it goes out in memory byte order; every other word is stored pre-swapped.
+///
+/// # Panics
+///
+/// If `stage` holds fewer than `4 + data.len()` words.
+#[allow(clippy::indexing_slicing)]
+// bound: the `# Panics` precondition (stage.len() >= 4 + data.len()) covers every index in this function
 pub fn stage_write(stage: &mut [u32], data: &[u32], crc: u64) -> usize {
     let w = data.len();
     let [hi, lo] = crc_words(crc);

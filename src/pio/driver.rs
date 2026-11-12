@@ -267,10 +267,10 @@ impl<'d, PIO: Instance, const SM: usize> PioBus<'d, PIO, SM> {
         bswap: bool,
         timeout: Duration,
     ) -> Result<(), BusError> {
-        let transfer = self
-            .sm
-            .tx()
-            .dma_push(&mut self.dma, &self.stage[..len], bswap);
+        #[allow(clippy::indexing_slicing)]
+        // bound: `len` comes from `wire::stage_*`, which wrote `stage[..len]`, so len <= STAGE_WORDS
+        let words = &self.stage[..len];
+        let transfer = self.sm.tx().dma_push(&mut self.dma, words, bswap);
         with_timeout(timeout, transfer)
             .await
             .map_err(|_| BusError::Timeout)
@@ -417,7 +417,10 @@ impl<PIO: Instance, const SM: usize> Bus for PioBus<'_, PIO, SM> {
         let reply_time = bus.bus_time(40 + 8 + 64 + u32::from(recv) + 8);
         let words = wire::recv_words(recv);
         bus.pull_response(words, reply_time).await?;
-        wire::unpack_response(&bus.resp[..words], out);
+        #[allow(clippy::indexing_slicing)]
+        // bound: words = recv_words(recv) <= 17 = resp.len() for recv = 47 or 135
+        let received = &bus.resp[..words];
+        wire::unpack_response(received, out);
         op.done();
         Ok(())
     }
@@ -488,10 +491,10 @@ impl<PIO: Instance, const SM: usize> Bus for PioBus<'_, PIO, SM> {
 impl<PIO: Instance, const SM: usize> PioBus<'_, PIO, SM> {
     /// Receives the `words` words of a response into `resp` by DMA.
     async fn pull_response(&mut self, words: usize, timeout: Duration) -> Result<(), BusError> {
-        let transfer = self
-            .sm
-            .rx()
-            .dma_pull(&mut self.dma, &mut self.resp[..words], false);
+        #[allow(clippy::indexing_slicing)]
+        // bound: the only caller passes words = recv_words(recv) <= 17 = resp.len()
+        let resp = &mut self.resp[..words];
+        let transfer = self.sm.rx().dma_pull(&mut self.dma, resp, false);
         with_timeout(timeout, transfer)
             .await
             .map_err(|_| BusError::Timeout)

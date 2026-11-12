@@ -299,7 +299,10 @@ impl SimCard {
                 Fault::FlipResponseBit { bit } => {
                     if let Some(r) = response.as_mut() {
                         let bit = bit as usize % (r.len() * 8);
-                        r[bit / 8] ^= 0x80 >> (bit % 8);
+                        #[allow(clippy::indexing_slicing)]
+                        // bound: bit < r.len() * 8 after the modulo
+                        let byte = &mut r[bit / 8];
+                        *byte ^= 0x80 >> (bit % 8);
                     }
                 }
                 _ => {}
@@ -719,7 +722,10 @@ impl SimCard {
             match *f {
                 Fault::FlipDataBit { bit } => {
                     let bit = bit as usize % (bytes.len() * 8);
-                    bytes[bit / 8] ^= 1 << (bit % 8);
+                    #[allow(clippy::indexing_slicing)]
+                    // bound: bit < bytes.len() * 8 after the modulo
+                    let byte = &mut bytes[bit / 8];
+                    *byte ^= 1 << (bit % 8);
                 }
                 Fault::FlipCrcBit { bit } => crc ^= 1u64 << (bit % 64),
                 _ => {}
