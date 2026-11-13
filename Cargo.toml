@@ -5,6 +5,11 @@ edition = "2024"
 publish = false
 license = "MIT"
 description = "Native four-bit SD card host: a hardware-independent protocol core, with a PIO + DMA bus for embassy-rp"
+repository = "https://github.com/Lmx154/pio-sdmmc-rs"
+readme = "README.md"
+keywords = ["embedded", "no-std", "driver", "sd-card", "sdmmc"]
+categories = ["embedded", "no-std", "hardware-support"]
+rust-version = "1.99"
 
 [features]
 default = []

@@ -4,6 +4,10 @@ Native four-bit SD card driver (async, `no_std`) for the MARV V2 Rev 1 flight co
 
 **Status: version 0.1.0, not published (`publish = false`), the API may still change.** One card was tested, on one board; see "Not covered".
 
+## Works with
+
+The protocol core and the public `Bus` trait are hardware-independent: any transport can implement `Bus`. The PIO + DMA bus is for the Raspberry Pi RP2040/RP2350, is written for `embassy-rp` 0.10 and uses `embassy-time`; it is behind the `embassy-rp-0-10` feature. No back-end for `rp2040-hal` or `rp235x-hal` exists for the PIO transport; the core and the `Bus` trait are the place to add one.
+
 ## Quick start
 
 Against the simulated card. This block is compiled and run as a doctest (see "Tests"). It needs `embassy-futures` for `block_on`, and this crate with feature `sim`.
