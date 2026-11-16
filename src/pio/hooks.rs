@@ -40,10 +40,13 @@ impl<PIO: Instance, const SM: usize> PioBus<'_, PIO, SM> {
         let data_time =
             bus.bus_time(8 * w as u32 + 16 + 8) + Duration::from_millis(u64::from(timeout_ms));
         {
-            let transfer = bus.sm.rx().dma_pull(&mut bus.dma, data, true);
+            let fifo = bus.sm.rx_fifo_ptr();
+            let treq = bus.sm.rx_treq();
+            bus.dma.register().await;
+            let transfer = bus.dma.pull(fifo, data, treq, true)?;
             with_timeout(data_time, transfer)
                 .await
-                .map_err(|_| BusError::Timeout)?;
+                .map_err(|_| BusError::Timeout)??;
         }
         let tail = bus.bus_time(16 + 8);
         let hi = bus.pull_word(tail).await?;

@@ -16,17 +16,17 @@ use cortex_m::peripheral::DWT;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
-use embassy_rp::dma;
 use embassy_rp::pac;
-use embassy_rp::peripherals::{DMA_CH0, PIO0};
+use embassy_rp::peripherals::PIO0;
 use embassy_rp::pio::program::{
     InstructionOperands, JmpCondition, MovDestination, MovOperation, MovSource, SetDestination,
 };
 use embassy_rp::pio::{self, Pio};
 use embassy_time::{Duration, Instant, block_for};
+use hil_common::SdWaker;
 use panic_probe as _;
 use pio_sdmmc::bus::as_bytes;
-use pio_sdmmc::pio::{PioBus, PioBusConfig};
+use pio_sdmmc::pio::{DmaIrqHandler, PioBus, PioBusConfig};
 use pio_sdmmc::proto::{
     self, CardState, CardStatus, Cid, Command, CrcStatus, Csd, ResponseError, Scr,
 };
@@ -34,7 +34,7 @@ use pio_sdmmc::{Bus, BusError, ResponseBuf};
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
-    DMA_IRQ_0 => dma::InterruptHandler<DMA_CH0>;
+    DMA_IRQ_1 => DmaIrqHandler<SdWaker>;
 });
 
 type Sd = PioBus<'static, PIO0, 0>;
@@ -437,13 +437,11 @@ async fn s2_identify(rep: &mut Report, bus: &mut Sd) -> Option<Card> {
                 .command(&cmd.frame(), ResponseBuf::Short(&mut f))
                 .await
                 .is_ok()
+                && let Ok(o) = proto::decode_r3(&f)
+                && o.power_up_done()
             {
-                if let Ok(o) = proto::decode_r3(&f) {
-                    if o.power_up_done() {
-                        ocr = Some(o.0);
-                        break;
-                    }
-                }
+                ocr = Some(o.0);
+                break;
             }
         }
         bus.delay_ms(10).await;
@@ -1165,11 +1163,11 @@ async fn main(_spawner: Spawner) {
     let Pio {
         mut common, sm0, ..
     } = Pio::new(p.PIO0, Irqs);
-    let ch = dma::Channel::new(p.DMA_CH0, Irqs);
     let mut bus: Sd = PioBus::new(
         &mut common,
         sm0,
-        ch,
+        p.DMA_CH4,
+        Irqs,
         p.PIN_32,
         p.PIN_33,
         p.PIN_28,
@@ -1178,6 +1176,8 @@ async fn main(_spawner: Spawner) {
         p.PIN_31,
         PioBusConfig::default(),
     );
+    #[cfg(feature = "negative-no-inte1")]
+    hil_common::negative_no_inte1(4);
     defmt::info!(
         "[INFO] bus up: GPIOBASE16 = {}, INPUT_SYNC_BYPASS = {:#010x}, SM0 EXECCTRL.JMP_PIN = {}",
         pac::PIO0.gpiobase().read().gpiobase(),

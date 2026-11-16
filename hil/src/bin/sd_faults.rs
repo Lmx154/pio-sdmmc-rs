@@ -19,20 +19,20 @@ use core::task::Poll;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
-use embassy_rp::dma;
-use embassy_rp::peripherals::{DMA_CH0, PIO0};
+use embassy_rp::peripherals::PIO0;
 use embassy_rp::pio::{self, Pio};
 use embassy_time::{Duration, Instant, with_timeout};
+use hil_common::SdWaker;
 use panic_probe as _;
 use pio_sdmmc::bus::{as_bytes, as_bytes_mut};
-use pio_sdmmc::pio::{PioBus, PioBusConfig};
+use pio_sdmmc::pio::{DmaIrqHandler, PioBus, PioBusConfig};
 use pio_sdmmc::proto::{CardState, CardStatus, Command, crc16_4bit, decode_r1};
 use pio_sdmmc::{Block, Bus, BusError, CardInfo, Config, Error, ResponseBuf, SdCard};
 use static_cell::StaticCell;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
-    DMA_IRQ_0 => dma::InterruptHandler<DMA_CH0>;
+    DMA_IRQ_1 => DmaIrqHandler<SdWaker>;
 });
 
 type Sd = SdCard<FaultBus<PioBus<'static, PIO0, 0>>>;
@@ -528,6 +528,7 @@ async fn after_cancel(
 }
 
 /// Reads `n` blocks at `lba` and counts bytes that differ from the known pattern.
+#[allow(clippy::too_many_arguments)]
 async fn read_known(
     rep: &mut Report,
     card: &mut Sd,
@@ -1345,10 +1346,10 @@ async fn x4_app(rep: &mut Report, card: &mut Sd, wbuf: &mut [Block], rbuf: &mut 
             }
         }
         // A plain CMD13 on a card that has not been cut, for comparison.
-        if let Some(s) = raw_status(card).await {
-            if s.app_cmd() {
-                normal += 1;
-            }
+        if let Some(s) = raw_status(card).await
+            && s.app_cmd()
+        {
+            normal += 1;
         }
         if !rewrite_verify(rep, card, &mut sec, case, wbuf, rbuf, 8).await {
             return false;
@@ -1536,11 +1537,11 @@ async fn main(_spawner: Spawner) {
     let Pio {
         mut common, sm0, ..
     } = Pio::new(p.PIO0, Irqs);
-    let ch = dma::Channel::new(p.DMA_CH0, Irqs);
     let bus = PioBus::new(
         &mut common,
         sm0,
-        ch,
+        p.DMA_CH4,
+        Irqs,
         p.PIN_32,
         p.PIN_33,
         p.PIN_28,

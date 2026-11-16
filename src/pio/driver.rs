@@ -1,14 +1,16 @@
 //! The bus type: one state machine, one DMA channel, two pin mappings.
 
 use embassy_rp::Peri;
-use embassy_rp::dma;
+use embassy_rp::dma::ChannelInstance;
 use embassy_rp::gpio::{Drive, Level, SlewRate};
+use embassy_rp::interrupt::typelevel::{Binding, DMA_IRQ_1};
 use embassy_rp::pio::program::{InstructionOperands, OutDestination};
 use embassy_rp::pio::{
     Common, Config, Direction, Instance, Pin, PioPin, ShiftConfig, ShiftDirection, StateMachine,
 };
 use embassy_time::{Duration, Timer, with_timeout};
 
+use super::dma::{DmaChannel, DmaIrqHandler, DmaWaker};
 use super::wire;
 use crate::bus::{Bus, BusError, ResponseBuf};
 
@@ -66,7 +68,7 @@ pub(super) enum Mapping {
 /// block.
 pub struct PioBus<'d, PIO: Instance, const SM: usize> {
     pub(super) sm: StateMachine<'d, PIO, SM>,
-    pub(super) dma: dma::Channel<'d>,
+    pub(super) dma: DmaChannel,
     cmd_cfg: Config<'d, PIO>,
     dat_cfg: Config<'d, PIO>,
     mapping: Mapping,
@@ -84,13 +86,19 @@ impl<'d, PIO: Instance, const SM: usize> PioBus<'d, PIO, SM> {
     /// Loads the program into `common`, takes over `sm`, `dma` and the six pins, and parks the bus
     /// idle (CLK low, CMD and DAT released) at [`IDENTIFICATION_HZ`].
     ///
+    /// The DMA channel completes on `DMA_IRQ_1` through `irq` (bind
+    /// `DMA_IRQ_1 => DmaIrqHandler<W>`): the channel's bit is cleared in INTE0, INTE2 and INTE3 and
+    /// set in INTE1, and `DMA_IRQ_1` is enabled at priority 3 in the NVIC of the calling core, which
+    /// therefore takes the interrupt. `DMA_IRQ_0` is not touched.
+    ///
     /// DAT0-3 must be consecutive GPIOs. Either all six pins are below 32 or all are 16 or above
     /// (the GPIOBASE window); a mix panics.
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub fn new<W: DmaWaker>(
         common: &mut Common<'d, PIO>,
         mut sm: StateMachine<'d, PIO, SM>,
-        dma: dma::Channel<'d>,
+        dma: Peri<'d, impl ChannelInstance>,
+        irq: impl Binding<DMA_IRQ_1, DmaIrqHandler<W>>,
         clk: Peri<'d, impl PioPin + 'd>,
         cmd: Peri<'d, impl PioPin + 'd>,
         dat0: Peri<'d, impl PioPin + 'd>,
@@ -99,6 +107,7 @@ impl<'d, PIO: Instance, const SM: usize> PioBus<'d, PIO, SM> {
         dat3: Peri<'d, impl PioPin + 'd>,
         config: PioBusConfig,
     ) -> Self {
+        let dma = DmaChannel::new(dma, irq);
         let prg = embassy_rp::pio::program::pio_asm!(
             ".side_set 1",
             ".define H 2",
@@ -270,10 +279,13 @@ impl<'d, PIO: Instance, const SM: usize> PioBus<'d, PIO, SM> {
         #[allow(clippy::indexing_slicing)]
         // bound: `len` comes from `wire::stage_*`, which wrote `stage[..len]`, so len <= STAGE_WORDS
         let words = &self.stage[..len];
-        let transfer = self.sm.tx().dma_push(&mut self.dma, words, bswap);
+        let fifo = self.sm.tx_fifo_ptr();
+        let treq = self.sm.tx_treq();
+        self.dma.register().await;
+        let transfer = self.dma.push(words, fifo, treq, bswap)?;
         with_timeout(timeout, transfer)
             .await
-            .map_err(|_| BusError::Timeout)
+            .map_err(|_| BusError::Timeout)?
     }
 
     /// Takes one word from the RX FIFO. A word already there is taken without arming a timer.
@@ -388,6 +400,9 @@ impl<PIO: Instance, const SM: usize> Bus for PioBus<'_, PIO, SM> {
         frame: &[u8; 6],
         response: ResponseBuf<'_>,
     ) -> Result<(), BusError> {
+        if self.dma.dead() {
+            return Err(BusError::Fault);
+        }
         let recv = match response {
             ResponseBuf::None => 0,
             ResponseBuf::Short(_) => wire::SHORT_RECV_NIBBLES,
@@ -428,18 +443,23 @@ impl<PIO: Instance, const SM: usize> Bus for PioBus<'_, PIO, SM> {
     async fn read_block(&mut self, data: &mut [u32], timeout_ms: u32) -> Result<u64, BusError> {
         let w = data.len();
         check_block_len(w);
+        if self.dma.dead() {
+            return Err(BusError::Fault);
+        }
         let op = Op::new(self);
         let bus = &mut *op.bus;
         bus.select(Mapping::Dat);
         let data_time = bus.bus_time(8 * w as u32 + 16 + 8) + millis(timeout_ms);
         {
-            let (rx, tx) = bus.sm.rx_tx();
+            let fifo = bus.sm.rx_fifo_ptr();
+            let treq = bus.sm.rx_treq();
+            bus.dma.register().await;
             // Armed before the header goes in: the data words go straight to `data`.
-            let transfer = rx.dma_pull(&mut bus.dma, data, true);
-            tx.push(wire::read_header(w));
+            let transfer = bus.dma.pull(fifo, data, treq, true)?;
+            bus.sm.tx().push(wire::read_header(w));
             with_timeout(data_time, transfer)
                 .await
-                .map_err(|_| BusError::Timeout)?;
+                .map_err(|_| BusError::Timeout)??;
         }
         // CRC high, CRC low and the final word; they fit in the FIFO, so they are already there
         // or arrive within 17 clocks.
@@ -459,6 +479,9 @@ impl<PIO: Instance, const SM: usize> Bus for PioBus<'_, PIO, SM> {
     ) -> Result<u8, BusError> {
         let w = data.len();
         check_block_len(w);
+        if self.dma.dead() {
+            return Err(BusError::Fault);
+        }
         let op = Op::new(self);
         let bus = &mut *op.bus;
         bus.select(Mapping::Dat);
@@ -472,6 +495,9 @@ impl<PIO: Instance, const SM: usize> Bus for PioBus<'_, PIO, SM> {
     }
 
     async fn wait_ready(&mut self, timeout_ms: u32) -> Result<(), BusError> {
+        if self.dma.dead() {
+            return Err(BusError::Fault);
+        }
         let op = Op::new(self);
         let bus = &mut *op.bus;
         bus.select(Mapping::Dat);
@@ -494,9 +520,12 @@ impl<PIO: Instance, const SM: usize> PioBus<'_, PIO, SM> {
         #[allow(clippy::indexing_slicing)]
         // bound: the only caller passes words = recv_words(recv) <= 17 = resp.len()
         let resp = &mut self.resp[..words];
-        let transfer = self.sm.rx().dma_pull(&mut self.dma, resp, false);
+        let fifo = self.sm.rx_fifo_ptr();
+        let treq = self.sm.rx_treq();
+        self.dma.register().await;
+        let transfer = self.dma.pull(fifo, resp, treq, false)?;
         with_timeout(timeout, transfer)
             .await
-            .map_err(|_| BusError::Timeout)
+            .map_err(|_| BusError::Timeout)?
     }
 }

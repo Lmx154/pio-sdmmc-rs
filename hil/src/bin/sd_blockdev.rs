@@ -12,18 +12,18 @@ use block_device_driver::BlockDevice;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
-use embassy_rp::dma;
-use embassy_rp::peripherals::{DMA_CH0, PIO0};
+use embassy_rp::peripherals::PIO0;
 use embassy_rp::pio::{self, Pio};
 use embassy_time::Instant;
+use hil_common::SdWaker;
 use panic_probe as _;
-use pio_sdmmc::pio::{PioBus, PioBusConfig};
+use pio_sdmmc::pio::{DmaIrqHandler, PioBus, PioBusConfig};
 use pio_sdmmc::{Block, Config, Error, SdCard};
 use static_cell::StaticCell;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
-    DMA_IRQ_0 => dma::InterruptHandler<DMA_CH0>;
+    DMA_IRQ_1 => DmaIrqHandler<SdWaker>;
 });
 
 type Sd = SdCard<PioBus<'static, PIO0, 0>>;
@@ -228,11 +228,11 @@ async fn main(_spawner: Spawner) {
     let Pio {
         mut common, sm0, ..
     } = Pio::new(p.PIO0, Irqs);
-    let ch = dma::Channel::new(p.DMA_CH0, Irqs);
     let bus = PioBus::new(
         &mut common,
         sm0,
-        ch,
+        p.DMA_CH4,
+        Irqs,
         p.PIN_32,
         p.PIN_33,
         p.PIN_28,

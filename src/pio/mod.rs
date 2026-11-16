@@ -131,6 +131,8 @@
 //!   triggers on, and the drive strength and slew rate from [`PioBusConfig`].
 
 #[cfg(feature = "embassy-rp-0-10")]
+mod dma;
+#[cfg(feature = "embassy-rp-0-10")]
 mod driver;
 #[cfg(feature = "embassy-rp-0-10")]
 #[doc(hidden)]
@@ -138,5 +140,7 @@ mod driver;
 pub mod hooks;
 pub mod wire;
 
+#[cfg(feature = "embassy-rp-0-10")]
+pub use dma::{DmaIrqHandler, DmaWaker};
 #[cfg(feature = "embassy-rp-0-10")]
 pub use driver::{IDENTIFICATION_HZ, PioBus, PioBusConfig};
