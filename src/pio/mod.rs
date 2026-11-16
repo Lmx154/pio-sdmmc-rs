@@ -1,5 +1,5 @@
-//! The [`Bus`](crate::bus::Bus) on an RP235x PIO state machine and one DMA channel
-//! (feature `embassy-rp-0-10`).
+//! The [`Bus`](crate::bus::Bus) on an RP235x PIO state machine and one DMA channel completing on
+//! `DMA_IRQ_1` (feature `embassy-rp-0-10`).
 //!
 //! All bus timing comes from the state machine. The CPU and the DMA only fill and drain FIFOs,
 //! and the program is written so that a FIFO serviced late stops the clock instead of corrupting
@@ -106,8 +106,10 @@
 //! the CPU: the timer starts after the CPU has done its part (pushed the header, armed the DMA),
 //! so a late CPU cannot turn into a false timeout. A command allows the rest of the frame,
 //! N_CR = 64 clocks, the response and 1 ms; a data operation allows the caller's `timeout_ms`,
-//! the transfer and 1 ms. On any error, timeout or dropped future the bus aborts to idle: the DMA
-//! transfer is dropped (aborted), the state machine disabled, `set pindirs, 0` (side 0)
+//! the transfer and 1 ms. On any error, timeout or dropped future the bus aborts to idle: an
+//! unfinished DMA transfer is cancelled first (EN cleared through AL1_CTRL's CLR alias, CHAN_ABORT
+//! written, at most 100 us for the channel to come to rest, INTS1 cleared; see the README's "DMA
+//! and interrupts"), then the state machine is disabled, `set pindirs, 0` (side 0)
 //! executed, the state machine restarted, its FIFOs cleared, its OSR emptied with
 //! `out null, 32` (a restart zeroes the output shift count, which means a full OSR), and it is
 //! parked at `hdr` and re-enabled.

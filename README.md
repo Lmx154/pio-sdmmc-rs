@@ -1,6 +1,6 @@
 # pio-sdmmc
 
-Native four-bit SD card driver (async, `no_std`) for the MARV V2 Rev 1 flight controller (RP2354B). The protocol and the card driver (`SdCard`: identification, block reads and writes, error recovery) are hardware-independent and reach the card only through the `Bus` trait. With no feature the crate has no dependencies. Feature `embassy-rp-0-10` adds the bus for the RP2350, one PIO state machine and one DMA channel (depends on `embassy-rp` 0.10 and `embassy-time`). Feature `sim` adds a simulated card for host tests. Feature `block-device-driver-0-2` adds an interface for filesystem libraries (depends on `block-device-driver` 0.2 and `aligned`). Feature `defmt` adds `defmt::Format`.
+Native four-bit SD card driver (async, `no_std`) for the MARV V2 Rev 1 flight controller (RP2354B). The protocol and the card driver (`SdCard`: identification, block reads and writes, error recovery) are hardware-independent and reach the card only through the `Bus` trait. With no feature the crate has no dependencies. Feature `embassy-rp-0-10` adds the bus for the RP2350, one PIO state machine and one DMA channel completing on `DMA_IRQ_1` (depends on `embassy-rp` 0.10 with `unstable-pac`, `embassy-time` and `atomic-waker` 1.1). Feature `sim` adds a simulated card for host tests. Feature `block-device-driver-0-2` adds an interface for filesystem libraries (depends on `block-device-driver` 0.2 and `aligned`). Feature `defmt` adds `defmt::Format`.
 
 **Status: version 0.1.0, not published (`publish = false`), the API may still change.** One card was tested, on one board; see "Not covered".
 
@@ -38,14 +38,27 @@ assert_eq!(info.capacity_blocks, 124_735_488);
 On the board, with the PIO bus (does not compile on a host). `hil/src/bin/sd_smoke.rs` is the compiled, tested original of this set-up:
 
 ```text
+use atomic_waker::AtomicWaker;
+use pio_sdmmc::pio::{DmaIrqHandler, DmaWaker, PioBus, PioBusConfig};
+
+// The waker of the bus's DMA completion: the application's static (the driver has none).
+static SD_WAKER: AtomicWaker = AtomicWaker::new();
+struct SdWaker;
+impl DmaWaker for SdWaker {
+    fn waker() -> &'static AtomicWaker {
+        &SD_WAKER
+    }
+}
+
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
-    DMA_IRQ_0 => dma::InterruptHandler<DMA_CH0>;
+    DMA_IRQ_1 => DmaIrqHandler<SdWaker>;
 });
 let p = embassy_rp::init(Default::default());
 let Pio { mut common, sm0, .. } = Pio::new(p.PIO0, Irqs);
+// Built on the core that is to take DMA_IRQ_1.
 let bus = PioBus::new(
-    &mut common, sm0, dma::Channel::new(p.DMA_CH0, Irqs),
+    &mut common, sm0, p.DMA_CH4, Irqs,
     p.PIN_32, p.PIN_33,                      // CLK, CMD
     p.PIN_28, p.PIN_29, p.PIN_30, p.PIN_31,  // DAT0..DAT3
     PioBusConfig::default(),
@@ -54,13 +67,27 @@ let mut card = SdCard::new(bus, Config::default());
 card.init().await?;
 ```
 
+`PioBus::new` signature: `new<W: DmaWaker>(common: &mut Common<'d, PIO>, sm: StateMachine<'d, PIO, SM>, dma: Peri<'d, impl dma::ChannelInstance>, irq: impl Binding<DMA_IRQ_1, DmaIrqHandler<W>>, clk, cmd, dat0, dat1, dat2, dat3: Peri<'d, impl PioPin>, config: PioBusConfig) -> PioBus<'d, PIO, SM>`.
+
 ## What the application provides
 
-- For the PIO bus: one PIO state machine, one DMA channel (with the interrupt bindings above), six pins (CLK, CMD, DAT0-3), and the chip feature of embassy-rp (`rp235xa` or `rp235xb`; the on-board programs use `rp235xb`). DAT0-3 must be consecutive GPIOs. Either all six pins are below 32 or all are 16 or above; a mix panics.
+- For the PIO bus: one PIO state machine, one DMA channel, the `DMA_IRQ_1` binding to `DmaIrqHandler<W>` and the `static` waker behind `W: DmaWaker` (above; one bus per `DMA_IRQ_1`), six pins (CLK, CMD, DAT0-3), and the chip feature of embassy-rp (`rp235xa` or `rp235xb`; the on-board programs use `rp235xb`). DAT0-3 must be consecutive GPIOs. Either all six pins are below 32 or all are 16 or above; a mix panics.
 - With CLK at GPIO32 or above (MARV V2: DAT0-3 = GPIO28-31, CLK = GPIO32, CMD = GPIO33) the PIO block's GPIOBASE must be 16. Another state machine in the same PIO block configured with all its pins below 32 writes GPIOBASE back to 0 and breaks this bus: give it another PIO block, or include a pin of 16 or above in its configuration.
 - The clock: the on-board programs run with `clk_sys` = 150 MHz (they print it). The PIO program makes one SD clock from six state-machine cycles with an integer divider, so 150 MHz gives the 25 MHz data clock (396.8 kHz for identification). Default Speed only.
 - A card that the driver accepts: 3.3 V, native four-bit mode (see "Not covered"). The board's socket has no card-detect switch; the application learns whether a card is present from `init` (`Error::NoCard`).
 - Or another bus back-end: implement `Bus` (`src/bus.rs` states the rules).
+
+## DMA and interrupts (PIO bus)
+
+The bus programs its one DMA channel itself, through embassy-rp's PAC, and completes on `DMA_IRQ_1`; it never builds an `embassy_rp::dma::Channel`. embassy-rp 0.10 puts every channel on `DMA_IRQ_0`, and its `Transfer::drop`, which runs after every transfer, aborts with a read-modify-write of the `CHAN_ABORT` register shared by all channels. That is unsafe when the other core runs embassy DMA transfers, as the flight core does on MARV V2.
+
+- **Construction** (`PioBus::new`, on the core that is to take the interrupt): the channel's bit is cleared in INTE0, INTE2 and INTE3 and set in INTE1, each through the register's atomic CLR or SET alias (RP2350 datasheet 2.1.3); `DMA_IRQ_1` gets priority 3 and is enabled in the calling core's NVIC. The bus never touches `DMA_IRQ_0` or INTE0 beyond clearing its own channel's bit.
+- **The handler** `DmaIrqHandler<W>`: reads INTS1, writes the same value back (write 1 to clear; only the bus channel's bit can be set there) and wakes `W::waker()`. No lock, no critical section, no panic.
+- **A transfer**: READ_ADDR, WRITE_ADDR, TRANS_COUNT (word count), then CTRL_TRIG: word size, increment on the memory side only, the state machine's TX or RX DREQ, CHAIN_TO = its own channel (no chaining), byte swap as before, interrupt on completion. The task's waker is registered before the trigger. The three uses keep their order and their time-outs: the staged stream to the TX FIFO, the data block from the RX FIFO (armed before the header goes in), the response words from the RX FIFO.
+- **Completion**: the channel is idle (CTRL.BUSY 0) and its raw interrupt bit has been acknowledged by the handler; then the transfer counts only with no READ_ERROR or WRITE_ERROR and the incrementing address at start + 4 x count, otherwise `BusError::Fault`. The transfer count is not used: an abort holds it at 0 (erratum RP2350-E5). Because the handler must have run, a missing interrupt shows as `BusError::Timeout`, not as a slow success.
+- **Cancel** (a transfer dropped before it finished: a time-out, an error or a dropped future), the datasheet's RP2350-E5 sequence plus pico-sdk's BUSY poll: (1) clear CTRL.EN through the CLR alias of AL1_CTRL, the control alias that does not trigger; (2) write the channel's bit to CHAN_ABORT (a plain write, never a read-modify-write); (3) spin until that CHAN_ABORT bit and CTRL.BUSY are both 0, at most 100 us; past that the bus is dead and every later call returns `BusError::Fault` until a new `PioBus` is built; (4) write the channel's bit to INTS1. This runs before the state machine is reset and before the buffer is released. A finished transfer's drop writes nothing. The 100 us bound is a worst case; in the firmware's probe of this sequence (2026-11-15, 2 000 cancels of a paced copy) the channel was at rest by the second poll every time.
+- Registers shared by all channels (INTR, INTE0-3, INTF0-3, INTS0-3, CHAN_ABORT, MULTI_CHAN_TRIGGER) are written only through SET/CLR aliases or as plain writes of the bus channel's own bit: `grep -rnE 'DMA\.(intr|inte|intf|ints|chan_abort|multi_chan_trigger)\([^)]*\)\.modify' src` prints nothing.
+- A late write-back by another core's embassy `Transfer::drop` (its read-modify-write of CHAN_ABORT) can still cut a transfer of this bus short; the end-address check turns that into `BusError::Fault`.
 
 ## Rules for correct use
 
@@ -109,6 +136,8 @@ Through the trait, every request goes through a bounce buffer of 8 blocks (4 KiB
 
 ## Measured
 
+**The figures below were measured with the earlier back-end (embassy-rp's `dma::Channel` on `DMA_IRQ_0`, 2026-11-11). The `DMA_IRQ_1` back-end has not yet run against a card**: `sd_bus`, `sd_smoke`, `sd_blockdev` and `sd_faults` and its negative control wait for a confirmed scratch card. Its register sequence (set-up, trigger, completion test, cancel) was run on the board in the firmware's probe P2 (2026-11-15, memory-to-memory copies on channel 4 while the flight core ran its IMUs on channels 0-3: 100 000 completions, 2 000 cancels, 0 errors).
+
 MARV V2 Rev 1 board, RP2354B, embassy-rp 0.10, one microSD card (the SanDisk above), `clk_sys` 150 MHz, 25 MHz data clock. Single runs, not statistics.
 
 - `sd_blockdev`, 2026-11-11 (`hil/logs/sd_blockdev-20261111-135754.log`), 256 blocks per call, 1024 blocks in all (4 x 256), so a different transfer size and run from the `sd_smoke` rows below, which explains the different direct-path figures: direct `write_blocks` 6.8 MB/s and `read_blocks` 7.9 MB/s; through the trait 2.8 MB/s write and 4.4 MB/s read.
@@ -137,7 +166,7 @@ On the board, through a debug probe: `tools/run.sh <program>` (it takes a lock, 
 | Program | What it proves |
 |---|---|
 | `alive` | tool chain, probe and board |
-| `sd_bus` | the PIO bus alone: identification at 400 kHz, reads, writes, a deliberately late DMA transfer, speed at 25 MHz |
+| `sd_bus` | the PIO bus alone: identification at 400 kHz, reads, writes, a deliberately late DMA transfer, speed at 25 MHz. With hil feature `negative-no-inte1` (NEGATIVE CONTROL) the channel is taken out of INTE1 after `PioBus::new`: every DMA transfer must time out, so identification fails |
 | `sd_smoke` | the card driver on the real bus: identification, 1 MiB write and read-back compare, throughput by call size, 4 KiB write latency, `OutOfRange` then a normal read |
 | `sd_blockdev` | the trait on the real bus: round trips against the direct path, a request across the 8-block chunk boundary, trait against direct throughput |
 | `sd_faults` | recovery on the real card: reads and writes cancelled by time and at every suspension point, the application-command pair cut between CMD55 and ACMD23, positive controls that find the card not ready when the clean-up is left out, card identity and data intact at the end |
@@ -153,7 +182,7 @@ All are off by default.
 | `std` | `std` in the crate | turned on by `sim` |
 | `sim` | the simulated card `sim`, with fault injection (host only) | tests of this crate and of code built on it |
 | `defmt` | `defmt::Format` on the public types, and defmt in embassy-rp and embassy-time when those are on | on target, if the application uses defmt |
-| `embassy-rp-0-10` | the PIO + DMA bus `pio::PioBus` (embassy-rp 0.10, embassy-time) | on the RP2350; the application picks the chip feature |
+| `embassy-rp-0-10` | the PIO + DMA bus `pio::PioBus` with `DmaIrqHandler` and `DmaWaker` (embassy-rp 0.10 with `unstable-pac`, embassy-time, atomic-waker 1.1) | on the RP2350; the application picks the chip feature |
 | `block-device-driver-0-2` | `BlockDevice<512>` for `SdCard` (block-device-driver 0.2, aligned) | to put a filesystem library on the driver |
 | `_test-hooks` | entry points only the on-board back-pressure test uses | test-only, outside any promise |
 
