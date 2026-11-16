@@ -106,7 +106,7 @@ A filesystem is not required. There are two ways.
 - Write records straight to consecutive blocks with `write_blocks`, and read them back with `read_blocks`. This is the most predictable: no feature, no layer between the application and the card, and the cost is that of the calls (see "Measured"). A host tool must then read the raw card, not a mounted volume.
 - Or put a filesystem library on the optional feature `block-device-driver-0-2`. `SdCard` then implements the async `block_device_driver::BlockDevice<512>` trait (`read`, `write`, `size`), which `embedded-fatfs` reaches through `block-device-adapters`. The driver itself contains no filesystem. Checked 2026-11-11: `embedded-fatfs` is only available from git; crates.io holds a 0.0.0 placeholder. Choosing a filesystem and testing it (power loss included) is the application's job; no filesystem was tested with this driver.
 
-Through the trait, every request goes through a bounce buffer of 8 blocks (4 KiB): N blocks become `ceil(N / 8)` driver calls and one 512-byte copy per block. A multi-chunk write that fails leaves the earlier 8-block chunks on the card; a failed read leaves the caller's buffer partly filled. Measured at 256 blocks per call (see "Measured"): 2.8 MB/s write and 4.4 MB/s read through the trait, against 6.8 and 7.9 MB/s direct. Only that case was measured through the trait. For either way, the card pauses now and then (see the latencies in "Measured"); the writer has to buffer across the pause.
+Through the trait, every request goes through a bounce buffer of 8 blocks (4 KiB): N blocks become `ceil(N / 8)` driver calls and one 512-byte copy per block. A multi-chunk write that fails leaves the earlier 8-block chunks on the card; a failed read leaves the caller's buffer partly filled. Measured at 256 blocks per call (see "Measured", 2026-11-15): 2.21 MB/s write and 5.05 MB/s read through the trait, against 5.86 and 9.67 MB/s direct. Only that case was measured through the trait. For either way, the card pauses now and then (see the latencies in "Measured"); the writer has to buffer across the pause.
 
 ## What the driver does
 
@@ -129,30 +129,32 @@ Through the trait, every request goes through a bounce buffer of 8 blocks (4 KiB
 
 ### Not verified on real hardware
 
-- Recovery after an interrupted application command has run on ONE real card (`sd_faults`, 2026-11-11, the SanDisk 64 GB card): the pair was cut between CMD55 and ACMD23 52 times per run, the card then answered a raw CMD13 with its APP_CMD bit set (6 of 6), the clean-up's CMD55 + ACMD23 pair was accepted, and the next operation succeeded with correct data every time. That card supports CMD23, so the driver takes the ACMD23 route on it only because the test hides the SCR's CMD23 bit from the driver; a card that really lacks CMD23 has not been tested. The rule the clean-up relies on (a command after CMD55 is an application command only when one with that index exists) was not re-read in the specification.
-- Cancellation on the real bus is covered in part. `sd_faults` drops driver futures on the real card: about 400 reads and 390 writes per run, cut by time and at every suspension point, with the first operation after each cancel being a status call, a read or a write in turn. The driver cleaned up by itself every time: 0 failed next operations, 0 wrong bytes, 0 bytes damaged outside the written range (three runs). Every one of those cancels landed in the data phase or between two operations. None landed inside a command frame or in a busy wait on the ordinary route (0 of 70 attempts: on this back-end the command future was never pending when polled), so those cases, and read CRC errors, rejected writes, timeouts, card removal and power loss, are proven on the simulated card only. At bus level, `sd_bus` does show that a command the card ignores times out and leaves the bus usable.
+- Recovery after an interrupted application command has run on ONE real card (`sd_faults`, 2026-11-11, the SanDisk 64 GB card): the pair was cut between CMD55 and ACMD23 52 times per run, the card then answered a raw CMD13 with its APP_CMD bit set (6 of 6), the clean-up's CMD55 + ACMD23 pair was accepted, and the next operation succeeded with correct data every time; repeated with the `DMA_IRQ_1` back-end on 2026-11-15 (two runs, 52 cuts each, every clean-up began with the pair, 0 failed next operations, 0 wrong bytes). That card supports CMD23, so the driver takes the ACMD23 route on it only because the test hides the SCR's CMD23 bit from the driver; a card that really lacks CMD23 has not been tested. The rule the clean-up relies on (a command after CMD55 is an application command only when one with that index exists) was not re-read in the specification.
+- Cancellation on the real bus is covered in part. `sd_faults` drops driver futures on the real card: about 400 reads and 390 writes per run, cut by time and at every suspension point, with the first operation after each cancel being a status call, a read or a write in turn. The driver cleaned up by itself every time: 0 failed next operations, 0 wrong bytes, 0 bytes damaged outside the written range (three runs with the old back-end on 2026-11-11, two with the `DMA_IRQ_1` back-end on 2026-11-15). Every one of those cancels landed in the data phase or between two operations. None landed inside a command frame or in a busy wait on the ordinary route (0 of 70 attempts in every run, on both back-ends: the command future was never pending when polled), so those cases, and read CRC errors, rejected writes, timeouts, card removal and power loss, are proven on the simulated card only. At bus level, `sd_bus` does show that a command the card ignores times out and leaves the bus usable.
 - Cards other than the one tested: a SanDisk 64 GB SDXC (CID product "SK64G"). No SDSC or SDHC card, no other manufacturer.
 - Any other board, pins or `clk_sys`.
 
 ## Measured
 
-**The figures below were measured with the earlier back-end (embassy-rp's `dma::Channel` on `DMA_IRQ_0`, 2026-11-11).** The `DMA_IRQ_1` back-end ran against the same card on 2026-11-15: `sd_bus`, `sd_smoke`, `sd_blockdev` and `sd_faults` (two runs) all end `RESULT: PASS`, and the negative control (`sd_bus` with `negative-no-inte1`) fails as intended, CMD0 with `Err(Timeout)` before any write (`hil/logs/*-20261115-22*.log`). Its throughput differs from the figures below by more than 10 %, in both directions and not the same way in `sd_smoke` and `sd_blockdev` (for example `sd_smoke` 256-block calls: write 8.97 MB/s, read 7.56 MB/s; `sd_blockdev` direct: write 5.86 MB/s, read 9.67 MB/s). The figures below stay until that difference is understood. Its register sequence (set-up, trigger, completion test, cancel) was run on the board in the firmware's probe P2 (2026-11-15, memory-to-memory copies on channel 4 while the flight core ran its IMUs on channels 0-3: 100 000 completions, 2 000 cancels, 0 errors).
+MARV V2 Rev 1 board, RP2354B, embassy-rp 0.10, the `DMA_IRQ_1` back-end on DMA channel 4, one microSD card (the SanDisk above), `clk_sys` 150 MHz, 25 MHz data clock, 2026-11-15. Single runs, not statistics.
 
-MARV V2 Rev 1 board, RP2354B, embassy-rp 0.10, one microSD card (the SanDisk above), `clk_sys` 150 MHz, 25 MHz data clock. Single runs, not statistics.
-
-- `sd_blockdev`, 2026-11-11 (`hil/logs/sd_blockdev-20261111-135754.log`), 256 blocks per call, 1024 blocks in all (4 x 256), so a different transfer size and run from the `sd_smoke` rows below, which explains the different direct-path figures: direct `write_blocks` 6.8 MB/s and `read_blocks` 7.9 MB/s; through the trait 2.8 MB/s write and 4.4 MB/s read.
-- `sd_smoke`, 2026-11-11 (`hil/logs/sd_smoke-20261111-135811.log`), 1 MiB per row:
+- `sd_smoke` (`hil/logs/sd_smoke-20261115-220056.log`), 1 MiB per row:
 
 | Blocks per call | Write | Read |
 |---|---|---|
-| 1 | 0.39 MB/s (longest call 32.2 ms) | 1.29 MB/s |
-| 8 | 2.93 MB/s | 4.93 MB/s |
-| 64 | 6.54 MB/s | 8.42 MB/s |
-| 256 | 7.53 MB/s | 9.11 MB/s |
+| 1 | 0.41 MB/s (longest call 31.9 ms) | 1.37 MB/s |
+| 8 | 3.12 MB/s | 4.69 MB/s |
+| 64 | 7.61 MB/s (longest call 4.4 ms) | 7.14 MB/s |
+| 256 | 8.97 MB/s (longest call 15.1 ms) | 7.56 MB/s |
 
-- Same run: 256 consecutive 4 KiB (8-block) writes, mean 1347 us per call, worst 1465 us.
-- `sd_bus`, 2026-11-11 (`hil/logs/sd_bus-20261111-135820.log`), raw bus calls, no card driver: 2048-block write 9.20 MB/s and read 11.09 MB/s (bus calls only); wire time per block at 25 MHz, computed (1042 clocks per read block, printed by `sd_bus`, not measured): 41.7 us, 12.29 MB/s. Single-block read: mean 215 us, worst 514 us. Single-block write including busy: mean 1333 us, worst 3940 us.
-- Identification facts of the tested card (OCR 0xC0FF8000, 124735488 blocks, ACMD41 ready after about 14 ms) are in `docs/device.md`.
+- Same run: 256 consecutive 4 KiB (8-block) writes, mean 1302 us per call, worst 1387 us.
+- `sd_blockdev` (`hil/logs/sd_blockdev-20261115-220207.log`), 256 blocks per call, 1024 blocks in all (4 x 256), a different transfer size and run from the `sd_smoke` rows: direct `write_blocks` 5.86 MB/s and `read_blocks` 9.67 MB/s; through the trait 2.21 MB/s write and 5.05 MB/s read.
+- `sd_bus` (`hil/logs/sd_bus-20261115-220042.log`), raw bus calls, no card driver: 2048-block write 9.93 MB/s and read 10.76 MB/s (bus calls only); wire time per block at 25 MHz, computed (1042 clocks per read block, printed by `sd_bus`, not measured): 41.7 us, 12.29 MB/s. Single-block read: mean 264 us, worst 560 us. Single-block write including busy: mean 1365 us, worst 1518 us.
+- `sd_faults`, two runs (`hil/logs/sd_faults-20261115-220221.log`, `-220326.log`): 398 and 399 reads and 388 and 387 writes cancelled, 0 failed next operations, 0 wrong bytes, 0 bytes damaged outside the written range; the application-command pair cut 52 times per run, every clean-up began with CMD55 + ACMD23 and the next operation succeeded with correct data.
+- Negative control (`hil/logs/sd_bus-negative-no-inte1-20261115-220308.log`, `sd_bus` with hil feature `negative-no-inte1`): CMD0 `Err(Timeout)`, CMD8 `Err(Bus(Timeout))`, `RESULT: FAIL (2 failed checks)`, no write sent.
+- The register sequence also ran in the firmware's probe P2 (2026-11-15, memory-to-memory copies on channel 4 while the flight core ran its IMUs on channels 0-3): 100 000 completions, 2 000 cancels each at rest by the second poll, 0 errors.
+- The old back-end (embassy-rp's `dma::Channel` on `DMA_IRQ_0`, 2026-11-11) gave figures that differ from these by up to about 20 % in both directions (in `sd_smoke` the writes are now faster and the reads slower, in `sd_blockdev` the opposite); the cost per block appears to depend on the binary's layout (not investigated).
+- Identification facts of the tested card (OCR 0xC0FF8000, 124735488 blocks, ACMD41 ready after about 14 ms; 2026-11-11, not re-measured) are in `docs/device.md`.
 
 ## Tests
 
